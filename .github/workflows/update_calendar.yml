@@ -1,0 +1,31 @@
+name: Update Economic Calendar
+
+on:
+  schedule:
+    # 毎日 日本時間 05:00 (UTC 20:00) に実行
+    - cron: '0 20 * * *'
+  workflow_dispatch: # 手動実行ボタンを有効にする
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests supabase
+
+      - name: Run script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python fetch_calendar.py
