@@ -4,18 +4,15 @@ from datetime import datetime, timedelta, timezone
 import io
 import requests
 import re
-import os  # 追加：環境変数を読み込むために必要
+import os
 
-# --- 設定 (GitHubのSecretsから安全に読み込む設定) ---
+# --- 設定 ---
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTd8pTpRBuVkToA9KIpFWBe1QdhuKsrs_6tk6TcjCBK8ZJoA6nrisFV0FVZcCDG4ic6ge3b-2latHo9/pub?output=csv"
-
-# GitHubのSettings > Secrets > Actions で登録した名前を os.environ.get("...") に指定します
 SUPABASE_URL = os.environ.get("SUPABASE_URL") 
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") 
 
-# 万が一Secretsが未設定の場合のチェック
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("エラー: GitHubのSecretsに SUPABASE_URL または SUPABASE_KEY が設定されていません。")
+    print("エラー: GitHubのSecretsが設定されていません。")
     exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -25,36 +22,42 @@ def fetch_and_save():
     try:
         response = requests.get(CSV_URL)
         response.encoding = 'utf-8'
-        df = pd.read_csv(io.StringIO(response.text), header=None)
+        # headerを指定せず、全データを読み込んでから解析します
+        df = pd.read_csv(io.StringIO(response.text))
         
         jst = timezone(timedelta(hours=9))
         today_jst = datetime.now(jst)
         current_year = today_jst.year
         
-        # 取得範囲の定義 (今日から7日後まで)
+        # 取得範囲：今日から7日後まで
         start_date = today_jst.replace(hour=0, minute=0, second=0, microsecond=0)
         end_date = start_date + timedelta(days=7)
         
         success_count = 0
 
         for i, row in df.iterrows():
-            if i == 0: continue # タイトル行スキップ
+            # 行内の全データを文字列リスト化（欠損値 nan は除外）
+            vals = [str(v).strip() for v in row.tolist() if str(v).strip().lower() != 'nan']
             
-            vals = [str(v).strip() for v in row.tolist()]
-            
-            # --- 日付の自動判定 ---
+            # --- 日付の自動判定 (M/D 形式を探す) ---
             event_date_dt = None
             for v in vals:
+                # 3/4 や 03/04 などの形式を検索
                 match = re.search(r'(\d{1,2})[/-](\d{1,2})', v)
                 if match:
                     month, day = match.groups()
-                    dt = datetime(current_year, int(month), int(day), tzinfo=jst)
-                    if today_jst.month == 12 and int(month) == 1:
-                        dt = dt.replace(year=current_year + 1)
-                    
-                    if start_date <= dt <= end_date:
-                        event_date_dt = dt
-                    break
+                    try:
+                        dt = datetime(current_year, int(month), int(day), tzinfo=jst)
+                        # 年越し補正
+                        if today_jst.month == 12 and int(month) == 1:
+                            dt = dt.replace(year=current_year + 1)
+                        
+                        # 範囲内（今日〜7日後）なら確定
+                        if start_date <= dt <= end_date:
+                            event_date_dt = dt
+                            break
+                    except ValueError:
+                        continue
 
             if event_date_dt is None:
                 continue
@@ -62,15 +65,19 @@ def fetch_and_save():
             event_date_str = event_date_dt.strftime("%Y-%m-%d")
 
             # --- 列の自動判定 ---
-            time_val = next((v for v in vals if ":" in v and len(v) <= 5), "00:00")
+            # 時間 (HH:MM 形式)
+            time_val = next((v for v in vals if re.search(r'\d{1,2}:\d{2}', v)), "00:00")
+            # 重要度 (★)
             importance_raw = next((v for v in vals if "★" in v), "")
-            long_vals = [v for v in vals if len(v) > 5 and ":" not in v and "http" not in v and "/" not in v]
-            event_name = long_vals[0] if long_vals else ""
+            # 指標名 (日付、時間、URL、★、3文字大文字通貨 以外の比較的長い文字)
+            event_name = next((v for v in vals if len(v) > 5 and ":" not in v and "/" not in v and "★" not in v and "http" not in v), "経済指標")
 
-            if event_name and event_name != "nan":
+            if event_name:
                 try:
-                    currency = next((v for v in vals if len(v) == 3 and v.isupper()), "---")
+                    # 通貨 (USD, JPYなど大文字3文字)
+                    currency = next((v for v in vals if len(v) == 3 and v.isupper() and v not in ["DAY", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]), "USD")
                     
+                    # USDとJPYに限定（必要に応じて他通貨も追加可）
                     if currency not in ["USD", "JPY"]:
                         continue
 
@@ -82,7 +89,6 @@ def fetch_and_save():
                         "importance": importance_raw.count("★") if importance_raw else 1
                     }
 
-                    # upsertを使うので、同じ指標名・同じ日付・同じ時刻なら上書きされます
                     supabase.table("economic_calendar").upsert(event_data).execute()
                     print(f"✅ 同期成功: {event_date_str} {time_val} | {currency} | {event_name}")
                     success_count += 1
@@ -92,7 +98,7 @@ def fetch_and_save():
                     else:
                         success_count += 1
 
-        print(f"\n✨ 完了！ 今後1週間以内の {success_count} 件の重要指標を同期しました。")
+        print(f"\n✨ 完了！ 今後1週間以内の {success_count} 件の指標を同期しました。")
 
     except Exception as e:
         print(f"致命的エラー: {e}")
