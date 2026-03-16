@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>FXテクニカル分析パネル (経済指標連携版)</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin: 0; background: #131722; color: white; font-family: sans-serif; overflow-y: hidden; }
+        
+        /* 固定ヘッダー（トレンドバー） */
+        .fixed-trend-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 45px;
+            background: #1e222d;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 15px;
+            z-index: 2000;
+            border-bottom: 2px solid #2962ff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            box-sizing: border-box;
+        }
+
+        .header-left { display: flex; align-items: center; }
+        .trend-price { color: #fff; font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold; margin-right: 20px; min-width: 140px; }
+        .trend-list { display: flex; gap: 8px; align-items: center; border-left: 1px solid #2b2b43; padding-left: 15px; }
+        .trend-unit { display: flex; flex-direction: column; align-items: center; min-width: 38px; line-height: 1.1; }
+        .trend-arrow-mini { font-size: 18px; font-weight: bold; }
+        .trend-label-mini { font-size: 10px; font-weight: bold; color: #d1d4dc; }
+        
+        .header-right { display: flex; gap: 8px; align-items: center; }
+        .tool-btn {
+            text-decoration: none;
+            color: #d1d4dc;
+            background: #2b2b43;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            border: 1px solid #363a45;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .tool-btn:hover { background: #363a45; border-color: #2962ff; color: #fff; }
+        .btn-highlight { background: #2962ff; color: white; border-color: #2962ff; }
+        .btn-highlight:hover { background: #1e4bd8; }
+
+        .up-trend { color: #00e676; }
+        .down-trend { color: #ff5252; }
+        .range-trend { color: #ffeb3b; }
+
+        /* 点滅アニメーションの追加 */
+        @keyframes blink-trend {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+        .trend-blink {
+            animation: blink-trend 0.8s infinite;
+        }
+
+        .slider-container {
+            display: flex;
+            overflow-x: auto;
+            scroll-snap-type: x mandatory;
+            width: 100vw;
+            height: calc(100vh - 45px); 
+            margin-top: 45px;
+            scrollbar-width: thin;
+            scrollbar-color: #2b2b43 #131722;
+        }
+        
+        .chart-set {
+            flex: 0 0 33.33vw;
+            min-width: 380px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #2b2b43;
+            box-sizing: border-box;
+            scroll-snap-align: start;
+            transition: background-color 0.8s ease;
+        }
+
+        .chart-set.active-buy { background-color: rgba(0, 230, 118, 0.15) !important; }
+        .chart-set.active-sell { background-color: rgba(255, 82, 82, 0.15) !important; }
+        .chart-set.active-warning { background-color: rgba(255, 235, 59, 0.15) !important; }
+
+        .info-panel { height: 35px; padding: 0 10px; background: #1e222d; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b2b43; box-sizing: border-box; font-size: 11px; }
+        
+        .chart-box-main { flex: 2.2; width: 100%; }
+        .chart-box-sub  { flex: 1; width: 100%; border-top: 1px solid #2b2b43; }
+
+        .status-badge { font-weight: bold; padding: 2px 8px; border-radius: 4px; background: #2b2b43; color: #ffeb3b; font-size: 10px; }
+        .atr-badge { color: #00e676; font-size: 10px; border: 1px solid #00e676; padding: 1px 4px; border-radius: 3px; margin-left: 5px;}
+    </style>
+</head>
+<body>
+
+    <div class="fixed-trend-bar">
+        <div class="header-left">
+            <div class="trend-price" id="global-price">USD/JPY: --.---</div>
+            <div class="trend-list" id="global-trend-list"></div>
+        </div>
+
+        <div class="header-right">
+            <a href="http://127.0.0.1:3000/simulation.html" target="_blank" rel="noopener noreferrer" class="tool-btn btn-highlight">📊 シミュレーター</a>
+            <a href="https://fx.dmm.com/" target="_blank" rel="noopener noreferrer" class="tool-btn">💹 DMM FX</a>
+            <a href="https://www.oanda.jp/lab-education/oanda_lab/oanda_rab/currency_power_balance/" target="_blank" rel="noopener noreferrer" class="tool-btn">🔗 OANDA強弱</a>
+            <a href="https://www.cmegroup.com/ja/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener noreferrer" class="tool-btn">📈 FedWatch</a>
+            <a href="calendar.html" target="_blank" rel="noopener noreferrer" class="tool-btn">📅 カレンダー</a>
+        </div>
+    </div>
+
+    <div class="slider-container" id="slider">
+        <div id="sec-1m" class="chart-set"></div>
+        <div id="sec-5m" class="chart-set"></div>
+        <div id="sec-15m" class="chart-set"></div>
+        <div id="sec-30m" class="chart-set"></div>
+        <div id="sec-1h" class="chart-set"></div>
+        <div id="sec-4h" class="chart-set"></div>
+        <div id="sec-8h" class="chart-set"></div>
+        <div id="sec-1d" class="chart-set"></div>
+        <div id="sec-1w" class="chart-set"></div>
+    </div>
+
+    <script>
+        const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1d', '1w'];
+        const chartInstances = {};
+        const lastJsonStrings = {}; 
+        let allLevelsData = {};
+
+        window.addEventListener('DOMContentLoaded', () => {
+            
+            TIMEFRAMES.forEach(tf => {
+                const container = document.getElementById(`sec-${tf}`);
+                if(!container) return;
+                container.innerHTML = `
+                    <div class="info-panel">
+                        <div><b>${tf.toUpperCase()}</b> <span id="atr-${tf}" class="atr-badge">ATR: --</span></div>
+                        <div id="status-${tf}" class="status-badge">監視中</div>
+                    </div>
+                    <div id="main-${tf}" class="chart-box-main"></div>
+                    <div id="rsi-${tf}" class="chart-box-sub"></div>
+                    <div id="macd-${tf}" class="chart-box-sub"></div>
+                    <div id="stoch-${tf}" class="chart-box-sub"></div>
+                `;
+
+                const commonOptions = {
+                    layout: { background: { color: 'transparent' }, textColor: '#d1d4dc', fontSize: 11 },
+                    grid: { vertLines: { color: '#1f212d' }, horzLines: { color: '#1f212d' } },
+                    rightPriceScale: { borderVisible: false, minimumWidth: 70, maximumWidth: 70 },
+                    timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 50 },
+                };
+
+                const mainChart = LightweightCharts.createChart(document.getElementById(`main-${tf}`), commonOptions);
+                const rsiChart = LightweightCharts.createChart(document.getElementById(`rsi-${tf}`), { ...commonOptions, timeScale: { visible: false } });
+                const macdChart = LightweightCharts.createChart(document.getElementById(`macd-${tf}`), { ...commonOptions, timeScale: { visible: false } });
+                const stochChart = LightweightCharts.createChart(document.getElementById(`stoch-${tf}`), { ...commonOptions, timeScale: { visible: false } });
+
+                const priceFormat = { type: 'price', precision: 3, minMove: 0.001 };
+                const hideLabel = { title: '', lastValueVisible: false, priceLineVisible: false, priceFormat: priceFormat };
+
+                const bbArea = mainChart.addBaselineSeries({ baseValue: { type: 'price', price: 0 }, topFillColor1: 'rgba(41, 98, 255, 0.15)', topFillColor2: 'rgba(41, 98, 255, 0.05)', lineVisible: false, ...hideLabel });
+                const bbUpper2 = mainChart.addLineSeries({ color: 'rgba(100, 150, 255, 0.4)', lineWidth: 1, lineStyle: 2, ...hideLabel });
+                const bbLower2 = mainChart.addLineSeries({ color: 'rgba(100, 150, 255, 0.4)', lineWidth: 1, lineStyle: 2, ...hideLabel });
+                const spanA = mainChart.addLineSeries({ color: 'rgba(0, 255, 150, 0.5)', lineWidth: 1, ...hideLabel });
+                const spanB = mainChart.addLineSeries({ color: 'rgba(255, 82, 82, 0.5)', lineWidth: 1, ...hideLabel });
+                const maS = mainChart.addLineSeries({ color: 'rgba(255, 152, 0, 0.5)', lineWidth: 1, ...hideLabel });
+                const maL = mainChart.addLineSeries({ color: 'rgba(33, 150, 243, 0.5)', lineWidth: 1, ...hideLabel });
+                
+                const candle = mainChart.addCandlestickSeries({ 
+                    upColor: '#26a69a', 
+                    downColor: '#ef5350',
+                    priceFormat: priceFormat 
+                });
+
+                const eventBg = mainChart.addHistogramSeries({
+                    color: 'rgba(234, 179, 8, 0.18)', 
+                    priceScaleId: 'bg',
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                });
+                mainChart.priceScale('bg').applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+
+                const rsiS = rsiChart.addLineSeries({ color: '#cf49d8', lineWidth: 2, title: 'RSI' });
+                const rsiSync = rsiChart.addLineSeries({ color: 'transparent', lastValueVisible: false });
+                rsiS.createPriceLine({ price: 70, color: '#ef5350', lineWidth: 1, lineStyle: 2 });
+                rsiS.createPriceLine({ price: 30, color: '#26a69a', lineWidth: 1, lineStyle: 2 });
+
+                const macdLine = macdChart.addLineSeries({ color: '#2196f3', lineWidth: 1.5, title: 'MACD' });
+                const macdSig = macdChart.addLineSeries({ color: '#ff5252', lineWidth: 1.5, title: 'Sig' });
+                const macdHist = macdChart.addHistogramSeries({ title: 'Hist' });
+                const macdSync = macdChart.addLineSeries({ color: 'transparent', lastValueVisible: false });
+
+                const stK = stochChart.addLineSeries({ color: '#00e676', lineWidth: 1.5, title: 'K' });
+                const stD = stochChart.addLineSeries({ color: '#ff5252', lineWidth: 1.5, title: 'D', lineStyle: 2 });
+                const stSync = stochChart.addLineSeries({ color: 'transparent', lastValueVisible: false });
+
+                const sync = (src, targets) => {
+                    const range = src.getVisibleLogicalRange();
+                    if (range) targets.forEach(t => t.setVisibleLogicalRange(range));
+                };
+                mainChart.timeScale().subscribeVisibleLogicalRangeChange(() => sync(mainChart.timeScale(), [rsiChart.timeScale(), macdChart.timeScale(), stochChart.timeScale()]));
+
+                chartInstances[tf] = { 
+                    mainChart, candle, eventBg, bbArea, bbUpper2, bbLower2, spanA, spanB, maS, maL,
+                    rsiS, rsiSync, macdLine, macdSig, macdHist, macdSync, stK, stD, stSync,
+                    upperLines: [],
+                    priceFormat
+                };
+            });
+
+            async function updateTrends() {
+                try {
+                    const [resTrends, resLevels] = await Promise.all([
+                        fetch(`./all_trends.json?nocache=${Date.now()}`),
+                        fetch(`./all_levels.json?nocache=${Date.now()}`)
+                    ]);
+
+                    if (resTrends.ok) {
+                        const trends = await resTrends.json();
+                        const listContainer = document.getElementById('global-trend-list');
+                        let html = '';
+                        TIMEFRAMES.forEach(tf => {
+                            const data = trends[tf] || { icon: '→', text: 'レンジ' };
+                            let colorClass = 'range-trend';
+                            let blinkClass = ''; // 点滅クラス用
+
+                            if (data.icon === '↑' || data.icon === '↗') {
+                                colorClass = 'up-trend';
+                                if (data.icon === '↑') blinkClass = 'trend-blink'; // 最強上昇のみ点滅
+                            } else if (data.icon === '↓' || data.icon === '↘') {
+                                colorClass = 'down-trend';
+                                if (data.icon === '↓') blinkClass = 'trend-blink'; // 最強下降のみ点滅
+                            }
+
+                            if(tf === '1m' && data.price) document.getElementById('global-price').innerText = `USD/JPY: ${data.price.toFixed(3)}`;
+                            html += `<div class="trend-unit ${colorClass} ${blinkClass}"><span class="trend-arrow-mini">${data.icon}</span><span class="trend-label-mini">${tf}</span></div>`;
+                        });
+                        listContainer.innerHTML = html;
+                    }
+                    if (resLevels.ok) allLevelsData = await resLevels.json();
+                } catch (e) { }
+            }
+
+            async function updateCharts() {
+                for (const tf of TIMEFRAMES) {
+                    try {
+                        const res = await fetch(`./data_${tf}.json?nocache=${Date.now()}`);
+                        if (!res.ok) continue;
+                        
+                        const jsonText = await res.text();
+                        if (lastJsonStrings[tf] === jsonText) continue;
+                        
+                        const isFirstLoad = !lastJsonStrings[tf];
+                        lastJsonStrings[tf] = jsonText;
+
+                        const data = JSON.parse(jsonText);
+                        if (!data.candles || data.candles.length === 0) continue;
+
+                        const inst = chartInstances[tf];
+                        const container = document.getElementById(`sec-${tf}`);
+
+                        // 現在の表示範囲を保存
+                        const timeScale = inst.mainChart.timeScale();
+                        const currentRange = timeScale.getVisibleLogicalRange();
+
+                        container.classList.remove('active-buy', 'active-sell', 'active-warning');
+                        if (data.active_type === 'BUY') container.classList.add('active-buy');
+                        else if (data.active_type === 'SELL') container.classList.add('active-sell');
+
+                        inst.candle.setData(data.candles);
+
+                        let calendarMarkers = [];
+                        let bgData = [];
+                        if (data.economic_events) {
+                            const step = data.candles.length > 1 ? (data.candles[1].time - data.candles[0].time) : 60;
+                            data.economic_events.forEach(ev => {
+                                calendarMarkers.push({
+                                    time: ev.time, position: 'aboveBar', color: ev.importance >= 3 ? '#FF4444' : '#FFD700',
+                                    shape: 'arrowDown', text: '🔥' + ev.name
+                                });
+                                for (let t = ev.start; t <= ev.end; t += step) {
+                                    bgData.push({ time: t, value: 1000000 });
+                                }
+                            });
+                        }
+                        const uniqueBg = Array.from(new Map(bgData.map(item => [item.time, item])).values()).sort((a, b) => a.time - b.time);
+                        inst.eventBg.setData(uniqueBg);
+
+                        const combinedMarkers = [...(data.signals || []), ...calendarMarkers].sort((a, b) => a.time - b.time);
+                        inst.candle.setMarkers(combinedMarkers);
+
+                        if (data.ma_short) inst.maS.setData(data.ma_short);
+                        if (data.ma_long) inst.maL.setData(data.ma_long);
+                        if (data.senkou_a) inst.spanA.setData(data.senkou_a);
+                        if (data.senkou_b) inst.spanB.setData(data.senkou_b);
+                        if (data.bb_upper2) {
+                            inst.bbUpper2.setData(data.bb_upper2);
+                            inst.bbLower2.setData(data.bb_lower2);
+                            inst.bbArea.setData(data.bb_upper2);
+                            inst.bbArea.applyOptions({ baseValue: { type: 'price', price: data.bb_lower2[data.bb_lower2.length-1].value } });
+                        }
+                        if (data.rsi) inst.rsiS.setData(data.rsi);
+                        if (data.rsi_sync) inst.rsiSync.setData(data.rsi_sync);
+                        if (data.macd) {
+                            inst.macdLine.setData(data.macd);
+                            inst.macdSig.setData(data.macd_signal);
+                            inst.macdHist.setData(data.macd_hist.map(d => ({...d, color: d.value>=0 ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)'})));
+                        }
+                        if (data.macd_sync) inst.macdSync.setData(data.macd_sync);
+                        if (data.stoch_k) { inst.stK.setData(data.stoch_k); inst.stD.setData(data.stoch_d); }
+                        if (data.stSync) inst.stSync.setData(data.rsi_sync);
+
+                        if (inst.upperLines) inst.upperLines.forEach(l => inst.candle.removePriceLine(l));
+                        inst.upperLines = [];
+                        const targetTFs = TIMEFRAMES.slice(TIMEFRAMES.indexOf(tf));
+                        targetTFs.forEach((uTF, i) => {
+                            const level = allLevelsData[uTF];
+                            if (!level) return;
+                            let opacity = (uTF === tf) ? 1.0 : Math.max(0.1, 0.8 - ((i - 1) * 0.15));
+                            inst.upperLines.push(inst.candle.createPriceLine({ price: level.res, color: `rgba(239, 83, 80, ${opacity})`, title: `${uTF.toUpperCase()} RES`, lineWidth: (uTF === tf) ? 2 : 1, lineStyle: (uTF === tf) ? 0 : 2, axisLabelVisible: true }));
+                            inst.upperLines.push(inst.candle.createPriceLine({ price: level.sup, color: `rgba(0, 230, 118, ${opacity})`, title: `${uTF.toUpperCase()} SUP`, lineWidth: (uTF === tf) ? 2 : 1, lineStyle: (uTF === tf) ? 0 : 2, axisLabelVisible: true }));
+                        });
+
+                        document.getElementById(`status-${tf}`).innerText = data.status || "監視中";
+                        document.getElementById(`atr-${tf}`).innerText = data.atr ? `ATR: ${data.atr.toFixed(3)}` : "--";
+
+                        // 表示位置の制御
+                        if (isFirstLoad) {
+                            // 初回読み込み時は最新の足を表示（右側の未来余白を隠す）
+                            timeScale.scrollToPosition(0, false);
+                        } else if (currentRange) {
+                            // 更新時はユーザーが見ていた位置を維持
+                            timeScale.setVisibleLogicalRange(currentRange);
+                        }
+
+                    } catch (e) { if (!(e instanceof SyntaxError)) console.error(e); }
+                }
+            }
+
+            setInterval(() => { updateTrends(); updateCharts(); }, 5000);
+            updateTrends(); updateCharts();
+        });
+    </script>
+</body>
+</html>
