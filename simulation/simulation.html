@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>FX 戦略シミュレーター（フル分析版）</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin: 0; background: #131722; color: white; font-family: sans-serif; }
+        .header { background: #1e222d; padding: 15px 20px; border-bottom: 2px solid #2962ff; display: flex; justify-content: space-between; align-items: center; }
+        .tf-selector { display: flex; gap: 8px; flex-wrap: wrap; }
+        .tf-btn { background: #2b2b43; border: 1px solid #444; color: #ccc; padding: 6px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; font-size: 13px; }
+        .tf-btn.active { background: #2962ff; color: white; border-color: #2962ff; }
+        
+        .strategy-bar { background: #1e222d; padding: 10px 20px; border-bottom: 1px solid #2b2b43; display: flex; align-items: center; gap: 20px; }
+        .strategy-select { background: #2b2b43; border: 1px solid #444; color: white; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        .strategy-info { display: flex; gap: 15px; font-size: 12px; color: #aaa; }
+        .info-box { border-left: 1px solid #444; padding-left: 15px; }
+        .val-text { color: #00e676; font-weight: bold; }
+
+        .controls-right { display: flex; gap: 10px; align-items: center; }
+        .lot-control { background: #2b2b43; padding: 10px 15px; border-radius: 8px; border: 1px solid #444; display: flex; align-items: center; gap: 10px; }
+        .lot-input { background: #131722; border: 1px solid #2962ff; color: #00e676; padding: 5px; border-radius: 4px; width: 60px; text-align: center; font-weight: bold; }
+        
+        .export-btn { background: #00897b; color: white; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .export-btn:hover { background: #00bfa5; }
+
+        .container { padding: 20px; max-width: 1500px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+        .stat-card { background: #1e222d; padding: 12px; border-radius: 8px; border: 1px solid #2b2b43; }
+        .stat-label { font-size: 11px; color: #aaa; margin-bottom: 4px; }
+        .stat-value { font-size: 18px; font-weight: bold; color: #2962ff; }
+        .jpy-value { color: #00e676; font-size: 20px; }
+
+        .chart-container { display: flex; flex-direction: column; gap: 5px; background: #1e222d; border-radius: 8px; border: 1px solid #2b2b43; overflow: hidden; position: relative; }
+        #main-chart { height: 450px; position: relative; }
+        #rsi-chart { height: 120px; border-top: 1px solid #2b2b43; }
+        #macd-chart { height: 150px; border-top: 1px solid #2b2b43; }
+        
+        .history-section { background: #1e222d; border-radius: 8px; border: 1px solid #2b2b43; padding: 15px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+        th { background: #2b2b43; color: #aaa; text-align: left; padding: 8px; position: sticky; top: 0; }
+        td { padding: 6px 8px; border-bottom: 1px solid #2b2b43; cursor: pointer; }
+        tr:hover td { background: #2b2b43; }
+        .win { color: #00e676; font-weight: bold; }
+        .loss { color: #ff5252; font-weight: bold; }
+
+        .event-pulse {
+            width: 14px; height: 14px;
+            background: #ffeb3b;
+            border-radius: 50%;
+            position: absolute;
+            z-index: 100;
+            pointer-events: auto;
+            cursor: pointer;
+            box-shadow: 0 0 0 rgba(255, 235, 59, 0.9);
+            animation: pulse 1.2s infinite;
+            border: 2px solid #131722;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0.8); }
+            70% { box-shadow: 0 0 0 15px rgba(255, 235, 59, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h2 style="margin:0; font-size: 1.2em;">FX 戦略シミュレーター <small id="current-tf" style="color: #2962ff;"></small></h2>
+            <div class="tf-selector">
+                <button class="tf-btn" onclick="changeTimeframe('1m')">1m</button>
+                <button class="tf-btn" onclick="changeTimeframe('5m')">5m</button>
+                <button class="tf-btn active" onclick="changeTimeframe('15m')">15m</button>
+                <button class="tf-btn" onclick="changeTimeframe('30m')">30m</button>
+                <button class="tf-btn" onclick="changeTimeframe('1h')">1h</button>
+                <button class="tf-btn" onclick="changeTimeframe('4h')">4h</button>
+            </div>
+        </div>
+        <div class="controls-right">
+            <div class="lot-control">
+                <span style="font-size: 12px; color: #aaa;">取引数量:</span>
+                <input type="number" id="lot-input" class="lot-input" value="10" step="1" onchange="recalculateJPY()">
+                <span style="font-size: 12px; color: #aaa;">Lot</span>
+            </div>
+            <button class="export-btn" onclick="downloadNumbersCSV()">Numbers用CSV作成</button>
+        </div>
+    </div>
+
+    <div class="strategy-bar">
+        <div class="config-group">
+            <span style="font-size: 12px; color: #aaa; margin-right: 10px;">シミュレーション条件:</span>
+            <select id="strategy-select" class="strategy-select" onchange="onStrategyChange()">
+                <option value="rsi_30_70_50" data-in="30 / 70" data-out="50 / 50">基本 (30/70 入 - 50 出)</option>
+                <option value="bb_trend" data-in="±2σ ブレイク" data-out="20MA タッチ">BB順張り (トレンドフォロー)</option>
+                <option value="bb_reversal" data-in="±2σ タッチ" data-out="20MA タッチ">BB逆張り (リバーサル)</option>
+                <option value="rsi_20_80_50" data-in="20 / 80" data-out="50 / 50">慎重 (20/80 入 - 50 出)</option>
+                <option value="rsi_20_80_70" data-in="20 / 80" data-out="70 / 30">強気 (20/80 入 - 70/30 出)</option>
+                <option value="rsi_20_80_60" data-in="20 / 80" data-out="60 / 40">利伸 (20/80 入 - 60/40 出)</option>
+                <option value="rsi_20_80_40" data-in="20 / 80" data-out="40 / 60">早逃 (20/80 入 - 40/60 出)</option>
+            </select>
+
+            <span style="font-size: 12px; color: #aaa; margin-left: 20px; margin-right: 10px;">フィルター:</span>
+            <select id="filter-select" class="strategy-select" onchange="onStrategyChange()">
+                <option value="">フィルター無し</option>
+                <option value="double">Wフィルター (上位足過熱時は禁止)</option>
+            </select>
+        </div>
+        <div class="strategy-info">
+            <div class="info-box">エントリー閾値: <span id="display-in" class="val-text">30 / 70</span></div>
+            <div class="info-box">エグジット閾値: <span id="display-out" class="val-text">50 / 50</span></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card"><div class="stat-label">勝率</div><div id="win-rate" class="stat-value">-- %</div></div>
+            <div class="stat-card"><div class="stat-label">合計損益(pips)</div><div id="total-profit" class="stat-value">--</div></div>
+            <div class="stat-card"><div class="stat-label">合計損益(日本円)</div><div id="total-jpy" class="stat-value jpy-value">¥ --</div></div>
+            <div class="stat-card"><div class="stat-label">トレード数</div><div id="trade-count" class="stat-value">-- 回</div></div>
+            <div class="stat-card"><div class="stat-label">PF</div><div id="pf-value" class="stat-value">--</div></div>
+        </div>
+
+        <div class="chart-container">
+            <div id="main-chart"></div>
+            <div id="rsi-chart"></div>
+            <div id="macd-chart"></div>
+        </div>
+
+        <div class="history-section">
+            <h3 style="margin-top:0;">トレード履歴</h3>
+            <div style="max-height: 250px; overflow-y: auto;">
+                <table id="history-table">
+                    <thead>
+                        <tr>
+                            <th>エントリー日時</th>
+                            <th>決済日時</th>
+                            <th>種別</th>
+                            <th>入値</th>
+                            <th>出値</th>
+                            <th>損益(円)</th>
+                            <th>残高(円)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let charts = {}, series = {};
+        let currentData = null;
+        let tradeLines = []; 
+        let eventHighlights = [];
+        let currentTF = '15m';
+
+        const jpyFormatter = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
+
+        function onStrategyChange() {
+            const select = document.getElementById('strategy-select');
+            const opt = select.options[select.selectedIndex];
+            document.getElementById('display-in').innerText = opt.getAttribute('data-in');
+            document.getElementById('display-out').innerText = opt.getAttribute('data-out');
+            loadData(currentTF, true); // ストラテジー変更時はリセットあり
+        }
+
+        function initCharts() {
+            const commonOptions = {
+                layout: { background: { color: '#131722' }, textColor: '#d1d4dc', fontSize: 11 },
+                grid: { vertLines: { color: '#1f212d' }, horzLines: { color: '#1f212d' } },
+                timeScale: { borderVisible: false, timeVisible: true },
+                rightPriceScale: { borderVisible: false, minimumWidth: 70 },
+            };
+
+            charts.main = LightweightCharts.createChart(document.getElementById('main-chart'), commonOptions);
+            charts.rsi = LightweightCharts.createChart(document.getElementById('rsi-chart'), { ...commonOptions, timeScale: { visible: false } });
+            charts.macd = LightweightCharts.createChart(document.getElementById('macd-chart'), { ...commonOptions, timeScale: { visible: false } });
+
+            series.spanA = charts.main.addLineSeries({ color: 'rgba(0, 255, 150, 0.3)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false });
+            series.spanB = charts.main.addLineSeries({ color: 'rgba(255, 82, 82, 0.3)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false });
+            series.bbU = charts.main.addLineSeries({ color: 'rgba(41, 98, 255, 0.4)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+            series.bbL = charts.main.addLineSeries({ color: 'rgba(41, 98, 255, 0.4)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+            series.maS = charts.main.addLineSeries({ color: '#f23645', lineWidth: 1, title: 'MA5' });
+            series.maL = charts.main.addLineSeries({ color: '#2962ff', lineWidth: 1, title: 'MA20' });
+            series.candle = charts.main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false });
+
+            series.rsi = charts.rsi.addLineSeries({ color: '#cf49d8', lineWidth: 2, title: 'RSI' });
+            series.rsi.createPriceLine({ price: 70, color: 'rgba(239, 83, 80, 0.5)', lineWidth: 1, lineStyle: 2, title: '70' });
+            series.rsi.createPriceLine({ price: 30, color: 'rgba(38, 166, 154, 0.5)', lineWidth: 1, lineStyle: 2, title: '30' });
+
+            series.macdHist = charts.macd.addHistogramSeries({ title: 'MACD Hist' });
+            series.macdLine = charts.macd.addLineSeries({ color: '#2962ff', lineWidth: 1.5, title: 'MACD' });
+            series.macdSignal = charts.macd.addLineSeries({ color: '#ff9800', lineWidth: 1.5, title: 'Signal' });
+
+            charts.main.timeScale().subscribeVisibleLogicalRangeChange(() => {
+                const range = charts.main.timeScale().getVisibleLogicalRange();
+                charts.rsi.timeScale().setVisibleLogicalRange(range);
+                charts.macd.timeScale().setVisibleLogicalRange(range);
+                updatePulsePositions();
+            });
+        }
+
+        function updatePulsePositions() {
+            if (!charts.main || !currentData) return;
+            const timeScale = charts.main.timeScale();
+            const chartHeight = document.getElementById('main-chart').clientHeight;
+            const chartWidth = document.getElementById('main-chart').clientWidth;
+
+            document.querySelectorAll('.event-pulse').forEach(el => {
+                const ts = parseInt(el.getAttribute('data-ts'));
+                const x = timeScale.timeToCoordinate(ts);
+                
+                if (x !== null && x >= 0 && x <= chartWidth) {
+                    el.style.display = 'block';
+                    el.style.left = (x - 7) + 'px';
+                    el.style.top = (chartHeight - 40) + 'px';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+        }
+
+        function recalculateJPY() {
+            if (!currentData) return;
+            const lot = parseFloat(document.getElementById('lot-input').value) || 0;
+            const unit = 100000;
+            const jpyProfit = Math.floor(currentData.total_profit * lot * unit);
+            const el = document.getElementById('total-jpy');
+            el.innerText = jpyFormatter.format(jpyProfit);
+            el.className = "stat-value jpy-value " + (jpyProfit >= 0 ? "win" : "loss");
+
+            document.getElementById('history-body').innerHTML = currentData.history.map(t => {
+                const pJPY = Math.floor(t.profit * lot * unit);
+                const bJPY = Math.floor(t.balance * lot * unit);
+                return `<tr onclick="jumpToTime('${t.time}')">
+                    <td>${t.entry_time || "---"}</td><td>${t.time}</td>
+                    <td style="color:${t.type.includes('BUY')?'#26a69a':'#ef5350'}">${t.type}</td>
+                    <td>${t.entry.toFixed(3)}</td><td>${t.exit.toFixed(3)}</td>
+                    <td class="${pJPY>=0?'win':'loss'}">${jpyFormatter.format(pJPY)}</td>
+                    <td>${jpyFormatter.format(bJPY)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function downloadNumbersCSV() {
+            const timeframes = ["1m", "5m", "15m", "30m", "1h", "4h"];
+            const lot = parseFloat(document.getElementById('lot-input').value) || 10;
+            const strat = document.getElementById('strategy-select').value;
+            const filt = document.getElementById('filter-select').value;
+            const unit = 100000;
+            let csvContent = "\uFEFF戦略,フィルター,時間足,勝率,合計損益(pips),合計損益(日本円),トレード数,PF\n";
+
+            for (const tf of timeframes) {
+                try {
+                    const s_suffix = strat === "rsi_30_70_50" ? "" : "_" + strat;
+                    const f_suffix = filt === "" ? "" : "_" + filt;
+                    const response = await fetch(`sim_results_${tf}${s_suffix}${f_suffix}.json?nocache=${Date.now()}`);
+                    const data = await response.json();
+                    const jpyProfit = Math.floor(data.total_profit * lot * unit);
+                    const jpyFormatted = jpyProfit >= 0 ? `"¥${jpyProfit.toLocaleString()}"` : `"-¥${Math.abs(jpyProfit).toLocaleString()}"`;
+                    csvContent += `${strat},${filt || 'None'},${tf}足,${data.win_rate}%,${data.total_profit.toFixed(3)},${jpyFormatted},${data.trade_count} 回,${data.pf}\n`;
+                } catch (e) { console.warn(`Skip ${tf}:`, e); }
+            }
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = `FX_Results_${strat}_${filt || 'NoFilter'}_${new Date().toISOString().slice(0,10)}.csv`;
+            link.click();
+        }
+
+        async function loadData(tf = "15m", isReset = false) {
+            try {
+                // 【点滅防止】現在の表示範囲を保存
+                const timeScale = charts.main.timeScale();
+                const currentRange = timeScale.getVisibleLogicalRange();
+
+                currentTF = tf;
+                const strat = document.getElementById('strategy-select').value;
+                const filt = document.getElementById('filter-select').value;
+                const s_suffix = strat === "rsi_30_70_50" ? "" : "_" + strat;
+                const f_suffix = filt === "" ? "" : "_" + filt;
+                
+                const resSim = await fetch(`sim_results_${tf}${s_suffix}${f_suffix}.json?nocache=${Date.now()}`);
+                if (!resSim.ok) throw new Error("File not found");
+                currentData = await resSim.json();
+
+                document.getElementById('current-tf').innerText = `[ ${tf.toUpperCase()} ]`;
+                document.getElementById('win-rate').innerText = currentData.win_rate + " %";
+                document.getElementById('total-profit').innerText = (currentData.total_profit >= 0 ? "+" : "") + currentData.total_profit.toFixed(3);
+                document.getElementById('trade-count').innerText = currentData.trade_count + " 回";
+                document.getElementById('pf-value').innerText = currentData.pf;
+
+                const parseT = t => Math.floor(new Date(t).getTime() / 1000);
+                const candleData = currentData.candles.map(d => ({ 
+                    time: parseT(d.time), open: d.open, high: d.high, low: d.low, close: d.close 
+                }));
+                series.candle.setData(candleData);
+                
+                if (currentData.indicators) {
+                    const ind = currentData.indicators;
+                    const mapData = (arr) => arr ? arr.map(d => ({ time: parseT(d.time), value: d.value })) : [];
+                    series.maS.setData(mapData(ind.ma_s)); series.maL.setData(mapData(ind.ma_l));
+                    series.bbU.setData(mapData(ind.bb_u)); series.bbL.setData(mapData(ind.bb_l));
+                    series.spanA.setData(mapData(ind.s_a)); series.spanB.setData(mapData(ind.s_b));
+                    series.rsi.setData(mapData(ind.rsi));
+                    if(ind.macd_h) series.macdHist.setData(ind.macd_h.map(d => ({ 
+                        time: parseT(d.time), value: d.value, color: d.value >= 0 ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)' 
+                    })));
+                    if(ind.macd_line) series.macdLine.setData(mapData(ind.macd_line));
+                    if(ind.macd_sig) series.macdSignal.setData(mapData(ind.macd_sig));
+                }
+
+                tradeLines.forEach(l => charts.main.removeSeries(l)); tradeLines = [];
+                eventHighlights.forEach(l => charts.main.removeSeries(l)); eventHighlights = [];
+                document.querySelectorAll('.event-pulse').forEach(el => el.remove());
+
+                if (currentData.events) {
+                    currentData.events.forEach(ev => {
+                        const targetTs = parseT(ev.time);
+                        const startTs = parseT(ev.start);
+                        const endTs = parseT(ev.end);
+                        
+                        const highlight = charts.main.addHistogramSeries({
+                            color: 'rgba(255, 235, 59, 0.12)', 
+                            priceLineVisible: false,
+                            lastValueVisible: false,
+                            priceScaleId: 'overlay'
+                        });
+                        charts.main.priceScale('overlay').applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+
+                        const hData = candleData
+                            .filter(c => c.time >= startTs && c.time <= endTs)
+                            .map(c => ({ time: c.time, value: 1000000 }));
+
+                        highlight.setData(hData);
+                        eventHighlights.push(highlight);
+
+                        const pulse = document.createElement('div');
+                        pulse.className = 'event-pulse';
+                        pulse.setAttribute('data-ts', targetTs);
+                        pulse.onclick = (e) => { e.stopPropagation(); alert(`【経済指標】\n内容: ${ev.name}\n日時: ${ev.time}`); };
+                        document.getElementById('main-chart').appendChild(pulse);
+                    });
+                    requestAnimationFrame(() => updatePulsePositions());
+                }
+
+                let markers = [];
+                currentData.history.forEach(t => {
+                    const entTs = parseT(t.entry_time || t.time); const extTs = parseT(t.time);
+                    const buy = t.type.includes("BUY");
+                    markers.push({ time: entTs, position: buy ? 'belowBar' : 'aboveBar', color: buy ? '#26a69a' : '#ef5350', shape: buy ? 'arrowUp' : 'arrowDown', text: buy ? 'BUY' : 'SELL' });
+                    markers.push({ time: extTs, position: buy ? 'aboveBar' : 'belowBar', color: '#ffffff', shape: 'circle', text: 'EXIT' });
+                    const ls = charts.main.addLineSeries({ color: buy ? 'rgba(38, 166, 154, 1)' : 'rgba(239, 83, 80, 1)', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
+                    ls.setData([{ time: entTs, value: t.entry }, { time: extTs, value: t.exit }]);
+                    tradeLines.push(ls);
+                });
+                
+                series.candle.setMarkers(markers.sort((a,b) => a.time - b.time));
+                recalculateJPY();
+
+                // 【点滅防止】表示位置を復元
+                if (!isReset && currentRange) {
+                    timeScale.setVisibleLogicalRange(currentRange);
+                } else {
+                    timeScale.fitContent();
+                }
+
+            } catch (e) { 
+                console.error("Load Error:", e);
+            }
+        }
+
+        function jumpToTime(tStr) {
+            const ts = Math.floor(new Date(tStr).getTime() / 1000);
+            charts.main.timeScale().setVisibleRange({ from: ts - 3600 * 4, to: ts + 3600 * 4 });
+        }
+
+        function changeTimeframe(tf) {
+            document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.innerText === tf));
+            loadData(tf, true); // 時間足変更時はリセット
+        }
+
+        initCharts();
+        loadData('15m', true); // 初回はリセットあり
+        
+        window.addEventListener('resize', () => {
+            const w = document.body.clientWidth - 40;
+            charts.main.resize(w, 450); charts.rsi.resize(w, 120); charts.macd.resize(w, 150);
+            updatePulsePositions();
+        });
+
+        // 定期更新を行う場合はここを有効にしてください（現在は手動読み込みベース）
+        // setInterval(() => loadData(currentTF, false), 5000); 
+    </script>
+</body>
+</html>
